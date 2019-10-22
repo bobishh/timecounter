@@ -1,88 +1,124 @@
-module Event exposing (fromBase64, toString, Event)
-import Maybe
+module Event exposing (Event, fromBase64, secondsToString)
+
 import Base64
+import Maybe
 
-type alias Event = { posixMillis: Int, title: String }
 
-type alias TimeLeft = {
-        years: Int,
-        months: Int,
-        weeks: Int,
-        days: Int,
-        hours: Int,
-        minutes: Int,
-        seconds: Int
+type alias Event =
+    { posixSeconds : Int, title : String }
+
+
+type alias TimeLeft =
+    { years : Int
+    , months : Int
+    , weeks : Int
+    , days : Int
+    , hours : Int
+    , minutes : Int
+    , seconds : Int
     }
 
-toString : Event -> String
-toString event =
+
+maybeLabel : Int -> String -> String
+maybeLabel value string =
+    if value > 0 then
+        String.fromInt value ++ " " ++ string ++ " "
+
+    else
+        ""
+
+
+secondsToString : Int -> String
+secondsToString seconds =
     let
-        time = formatMillis(event)
-        years = String.fromInt time.years
-        months = String.fromInt time.months
-        weeks = String.fromInt time.weeks
-        days = String.fromInt time.days
-        hours = String.fromInt time.hours
-        minutes = String.fromInt time.minutes
-        seconds = String.fromInt time.seconds
+        time =
+            formatSeconds (abs seconds)
     in
-        years ++ "years " ++
-        months ++ "months " ++
-        days ++ "days " ++
-        hours ++ "hours " ++
-        minutes ++ "minutes " ++
-        seconds ++ "seconds "
+    maybeLabel time.years "years"
+        ++ maybeLabel time.months "months"
+        ++ maybeLabel time.weeks "weeks"
+        ++ maybeLabel time.days "days"
+        ++ maybeLabel time.hours "hours"
+        ++ maybeLabel time.minutes "minutes"
+        ++ maybeLabel time.seconds "seconds"
 
 
-
-bothDiv : Int -> Int -> (Int, Int)
+bothDiv : Int -> Int -> ( Int, Int )
 bothDiv divisible divider =
-    (divisible // divider, modBy divider divisible)
+    ( divisible // divider, modBy divider divisible )
+
 
 fromBase64 : String -> Result String Event
 fromBase64 encoded =
     case Base64.decode encoded of
-    Ok value ->
-        let
-            event = parseEventString value
-        in
+        Ok value ->
+            let
+                event =
+                    parseEventString value
+            in
             event
-    _ ->
-        Err "Can't decode string"
+
+        _ ->
+            Err "Can't decode string"
+
+
+toBase64 : Event -> String
+toBase64 event =
+    let
+        secondsString =
+            String.fromInt event.posixSeconds
+    in
+    Base64.encode secondsString ++ "<|>" ++ event.title
+
 
 parseEventString : String -> Result String Event
 parseEventString eventString =
     case String.split "<|>" eventString of
-        [millisString, title] ->
+        [ secondsString, title ] ->
             let
-                millis = parseMillis millisString
-                event = Event millis title
+                seconds =
+                    parseSeconds secondsString
+
+                event =
+                    Event seconds title
             in
-                Ok event
+            Ok event
 
         _ ->
             Err "Can't parse url"
 
-parseMillis : String -> Int
-parseMillis millisString =
-    String.toInt millisString |> Maybe.withDefault 0
+
+parseSeconds : String -> Int
+parseSeconds secondsString =
+    String.toInt secondsString |> Maybe.withDefault 0
 
 
-formatMillis : Event -> TimeLeft
-formatMillis event =
+formatSeconds : Int -> TimeLeft
+formatSeconds allSeconds =
     let
-        allSeconds = event.posixMillis // 1000
-        (years, noYears) = bothDiv allSeconds 31540000
-        (months, noMonths) = bothDiv noYears 2628600
-        (weeks, noWeeks) = bothDiv noMonths 604800
-        (days, noDays) = bothDiv noWeeks 86400
-        (hours, noHours) = bothDiv noDays 3660
-        (minutes, seconds) = bothDiv noHours 60
+        ( years, noYears ) =
+            bothDiv allSeconds 31540000
+
+        ( months, noMonths ) =
+            bothDiv noYears 2628600
+
+        ( weeks, noWeeks ) =
+            bothDiv noMonths 604800
+
+        ( days, noDays ) =
+            bothDiv noWeeks 86400
+
+        ( hours, noHours ) =
+            bothDiv noDays 3660
+
+        ( minutes, seconds ) =
+            bothDiv noHours 60
     in
-        { years =  years,
-          months = months,
-          weeks = weeks,
-          days = days,
-          hours = hours,
-          minutes = minutes,
-          seconds = seconds }
+    { years = years
+    , months = months
+    , weeks = weeks
+    , days = days
+    , hours = hours
+    , minutes = minutes
+    , seconds = seconds
+    }

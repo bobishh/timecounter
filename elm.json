@@ -11,6 +11,7 @@
             "elm/html": "1.0.0",
             "elm/time": "1.0.0",
             "elm/url": "1.0.0",
+            "mdgriffith/elm-ui": "1.1.5",
             "truqu/elm-base64": "2.0.4"
         },
         "indirect": {
