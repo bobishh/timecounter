@@ -1,5 +1,7 @@
 module Main exposing (main)
 
+-- Time extra
+
 import Base64
 import Browser exposing (UrlRequest(..))
 import Browser.Navigation as Nav
@@ -9,12 +11,13 @@ import Element.Border as Border
 import Element.Events exposing (..)
 import Element.Font as Font
 import Element.Input as Input
-import Event exposing (Event, fromBase64, secondsToString)
 import Html exposing (Html)
-import Html.Events exposing (..)
 import Maybe
+import String.Extra
 import Task
-import Time
+import Time exposing (Month(..), utc)
+import Time.Extra as Time
+import Timer exposing (..)
 import Url
 import Url.Parser as Url exposing ((</>), Parser, custom)
 
@@ -39,54 +42,32 @@ type alias Time =
     Float
 
 
-type alias EncodedEvent =
-    String
-
-
-type alias EventForm =
-    { year : String
-    , month : String
-    , day : String
-    , hours : String
-    , minutes : String
-    , seconds : String
-    , title : String
-    , filled : Bool
-    }
-
-
-type alias Timer =
-    { secondsLeft : Int
-    , event : Event
-    }
-
-
 type alias Model =
     { navKey : Nav.Key
     , page : Page
-    , timer : Maybe Timer
+    , now : Maybe Time.Posix
     }
 
 
 type Page
     = Index
-    | CreateTimer EventForm
-    | ShowTimer Event
+    | CreateTimer TimerForm
+    | ShowTimer Timer
     | Dunno
 
 
-base64StringToEvent : String -> Maybe Event
-base64StringToEvent string =
+base64StringToTimer : String -> Maybe Timer
+base64StringToTimer string =
     case fromBase64 string of
-        Ok event ->
-            Just event
+        Ok timer ->
+            Just timer
 
         Err _ ->
             Nothing
 
 
-templateEventForm : EventForm
-templateEventForm =
+templateTimerForm : TimerForm
+templateTimerForm =
     { year = ""
     , month = ""
     , day = ""
@@ -98,23 +79,23 @@ templateEventForm =
     }
 
 
-base64Parser : Parser (Event -> a) a
+base64Parser : Parser (Timer -> a) a
 base64Parser =
-    custom "STRING" base64StringToEvent
+    custom "STRING" base64StringToTimer
 
 
-newEventStringParser : String -> Maybe EventForm
-newEventStringParser string =
+newTimerStringParser : String -> Maybe TimerForm
+newTimerStringParser string =
     if string == "new" then
-        Just templateEventForm
+        Just templateTimerForm
 
     else
         Nothing
 
 
-newEventParser : Parser (EventForm -> a) a
-newEventParser =
-    custom "STRING" newEventStringParser
+newTimerParser : Parser (TimerForm -> a) a
+newTimerParser =
+    custom "STRING" newTimerStringParser
 
 
 urlToPage : Url.Url -> Page
@@ -135,107 +116,42 @@ urlParser =
         [ Url.map Index Url.top
 
         -- Url.s matches URLs ending with some string, in our case '/cats'
-        , Url.map CreateTimer newEventParser
+        , Url.map CreateTimer newTimerParser
 
         -- Again, Url.s matches a string. </> matches a '/' in the URL, and Url.int matches any integer and "returns" it, so that the user page value gets the user ID
         , Url.map ShowTimer (Url.s "t" </> base64Parser)
         ]
 
 
+tickOnce : Cmd Msg
+tickOnce =
+    Task.perform Tick Time.now
+
+
 init : () -> Url.Url -> Nav.Key -> ( Model, Cmd Msg )
 init flags url key =
     ( { navKey = key
       , page = urlToPage url
-      , timer = Nothing
+      , now = Nothing
       }
-    , maybeSetTimer
+    , tickOnce
     )
-
-
-maybeSetTimer : Cmd Msg
-maybeSetTimer =
-    Task.perform MaybeSetTimer Time.now
 
 
 type Msg
     = LinkClicked UrlRequest
-    | UpdateEventForm EventForm
-    | BuildEvent EventForm
+    | UpdateTimerForm TimerForm
+    | BuildTimer TimerForm
     | UrlChange Url.Url
     | Tick Time.Posix
-    | MaybeSetTimer Time.Posix
 
 
-updateTimer : Model -> Time.Posix -> Model
-updateTimer model time =
-    case model.timer of
-        Nothing ->
-            model
-
-        Just timer ->
-            let
-                realSecondsLeft =
-                    Time.posixToMillis time // 1000 - timer.event.posixSeconds
-
-                newTimer =
-                    { timer | secondsLeft = realSecondsLeft }
-            in
-            { model | timer = Just newTimer }
+buildUrlString : Timer -> String
+buildUrlString timer =
+    "/t/" ++ Base64.encode (String.fromInt timer.posixSeconds ++ "<|>" ++ timer.title)
 
 
-maybeBuildTimer : Time.Posix -> Event -> Maybe Timer
-maybeBuildTimer time event =
-    let
-        secondsLeft =
-            Time.posixToMillis time // 1000 - event.posixSeconds
-
-        timer =
-            Timer secondsLeft event
-    in
-    Just timer
-
-
-secondsFromEventForm : EventForm -> Int
-secondsFromEventForm form =
-    let
-        year =
-            Maybe.withDefault 0 (String.toInt form.year)
-
-        month =
-            Maybe.withDefault 0 (String.toInt form.month)
-
-        day =
-            Maybe.withDefault 0 (String.toInt form.day)
-
-        hours =
-            Maybe.withDefault 0 (String.toInt form.hours)
-
-        minutes =
-            Maybe.withDefault 0 (String.toInt form.minutes)
-
-        seconds =
-            Maybe.withDefault 0 (String.toInt form.seconds)
-    in
-    (year - 1970)
-        * 31540000
-        + ((month - 1) * 2628600)
-        + (day * 86400)
-        + (hours * 3660)
-        + (minutes * 60)
-        + seconds
-
-
-buildEvent : EventForm -> Event
-buildEvent eventForm =
-    { posixSeconds = secondsFromEventForm eventForm, title = eventForm.title }
-
-
-buildUrlString : Event -> String
-buildUrlString event =
-    "/t/" ++ Base64.encode (String.fromInt event.posixSeconds ++ "<|>" ++ event.title)
-
-
-formFilled : EventForm -> Bool
+formFilled : TimerForm -> Bool
 formFilled form =
     True
 
@@ -243,43 +159,28 @@ formFilled form =
 update : Msg -> Model -> ( Model, Cmd Msg )
 update msg model =
     case msg of
-        BuildEvent eventForm ->
-            let
-                event =
-                    buildEvent eventForm
+        BuildTimer timerForm ->
+            case buildTimerFromForm timerForm of
+                Just timer ->
+                    ( { model | page = ShowTimer timer }, Nav.pushUrl model.navKey (buildUrlString timer) )
 
-                newUrl =
-                    buildUrlString event
-            in
-            ( { model | page = ShowTimer event }, Nav.pushUrl model.navKey newUrl )
-
-        MaybeSetTimer newTime ->
-            case model.page of
-                ShowTimer event ->
-                    ( { model | timer = maybeBuildTimer newTime event }, Cmd.none )
-
-                _ ->
+                Nothing ->
                     ( model, Cmd.none )
 
-        UpdateEventForm eventForm ->
+        UpdateTimerForm timerForm ->
             let
                 updatedForm =
-                    { eventForm | filled = formFilled eventForm }
+                    { timerForm | filled = True }
             in
             case model.page of
-                CreateTimer event ->
-                    ( { model | page = CreateTimer eventForm }, Cmd.none )
+                CreateTimer _ ->
+                    ( { model | page = CreateTimer updatedForm }, Cmd.none )
 
                 _ ->
                     ( model, Cmd.none )
 
         Tick newTime ->
-            case model.timer of
-                Nothing ->
-                    ( model, Cmd.none )
-
-                Just value ->
-                    ( updateTimer model newTime, Cmd.none )
+            ( { model | now = Just newTime }, Cmd.none )
 
         LinkClicked urlRequest ->
             case urlRequest of
@@ -295,7 +196,7 @@ update msg model =
 
         UrlChange url ->
             ( { model | page = urlToPage url }
-            , maybeSetTimer
+            , tickOnce
             )
 
 
@@ -315,8 +216,8 @@ placeholder placeholderText =
     Just (Input.placeholder [] (el [ alignLeft ] (text placeholderText)))
 
 
-renderEventForm : EventForm -> Element Msg
-renderEventForm eventForm =
+renderTimerForm : TimerForm -> Element Msg
+renderTimerForm timerForm =
     el [ padding 100 ]
         (column [ centerX, centerY, width fill, Font.size 50 ]
             [ row [ width fill ]
@@ -324,8 +225,8 @@ renderEventForm eventForm =
                     { label =
                         Input.labelHidden "Title"
                     , placeholder = placeholder "Name it"
-                    , text = eventForm.title
-                    , onChange = \title -> UpdateEventForm { eventForm | title = title }
+                    , text = timerForm.title
+                    , onChange = \title -> UpdateTimerForm { timerForm | title = title }
                     }
                 ]
             , column [ width fill ]
@@ -335,22 +236,22 @@ renderEventForm eventForm =
                         { label =
                             Input.labelHidden "Year"
                         , placeholder = placeholder "YYYY"
-                        , text = eventForm.year
-                        , onChange = \year -> UpdateEventForm { eventForm | year = sanitizeInt year 9999 }
+                        , text = timerForm.year
+                        , onChange = \year -> UpdateTimerForm { timerForm | year = sanitizeInt year 9999 }
                         }
                     , Input.text inputStyles
                         { label =
                             Input.labelHidden "Month"
                         , placeholder = placeholder "MM"
-                        , text = eventForm.month
-                        , onChange = \month -> UpdateEventForm { eventForm | month = sanitizeInt month 12 }
+                        , text = timerForm.month
+                        , onChange = \month -> UpdateTimerForm { timerForm | month = sanitizeInt month 12 }
                         }
                     , Input.text inputStyles
                         { label =
                             Input.labelHidden "Day"
                         , placeholder = placeholder "DD"
-                        , text = eventForm.day
-                        , onChange = \day -> UpdateEventForm { eventForm | day = sanitizeInt day 31 }
+                        , text = timerForm.day
+                        , onChange = \day -> UpdateTimerForm { timerForm | day = sanitizeInt day 31 }
                         }
                     ]
                 ]
@@ -359,22 +260,22 @@ renderEventForm eventForm =
                     { label =
                         Input.labelHidden "Hours"
                     , placeholder = placeholder "HH"
-                    , text = eventForm.hours
-                    , onChange = \hours -> UpdateEventForm { eventForm | hours = sanitizeInt hours 23 }
+                    , text = timerForm.hours
+                    , onChange = \hours -> UpdateTimerForm { timerForm | hours = sanitizeInt hours 23 }
                     }
                 , Input.text inputStyles
                     { label =
                         Input.labelHidden "Minutes"
                     , placeholder = placeholder "MM"
-                    , text = eventForm.minutes
-                    , onChange = \minutes -> UpdateEventForm { eventForm | minutes = sanitizeInt minutes 59 }
+                    , text = timerForm.minutes
+                    , onChange = \minutes -> UpdateTimerForm { timerForm | minutes = sanitizeInt minutes 59 }
                     }
                 , Input.text inputStyles
                     { label =
                         Input.labelHidden "Seconds"
                     , placeholder = placeholder "SS"
-                    , text = eventForm.seconds
-                    , onChange = \seconds -> UpdateEventForm { eventForm | seconds = sanitizeInt seconds 59 }
+                    , text = timerForm.seconds
+                    , onChange = \seconds -> UpdateTimerForm { timerForm | seconds = sanitizeInt seconds 59 }
                     }
                 ]
             , row [ Font.size 50 ]
@@ -385,7 +286,7 @@ renderEventForm eventForm =
                     , Border.rounded 3
                     , width fill
                     ]
-                    { onPress = Just (BuildEvent eventForm)
+                    { onPress = Just (BuildTimer timerForm)
                     , label = Element.text "apply"
                     }
                 ]
@@ -407,6 +308,20 @@ sanitizeInt value limit =
 
     else
         String.fromInt intValue
+
+
+maybePluralize : Int -> String -> String
+maybePluralize value title =
+    String.Extra.pluralize title (title ++ "s") value
+
+
+maybeInterval : Int -> String -> Element Msg
+maybeInterval value title =
+    if value > 0 then
+        el [] (text (" " ++ maybePluralize value title))
+
+    else
+        text ""
 
 
 renderPage : Model -> Element Msg
@@ -431,23 +346,31 @@ renderPage model =
                     ]
                 ]
 
-        CreateTimer eventForm ->
-            column [] [ renderEventForm eventForm ]
+        CreateTimer timerForm ->
+            column [] [ renderTimerForm timerForm ]
 
-        ShowTimer encodedEvent ->
-            case model.timer of
-                Just timer ->
+        ShowTimer timer ->
+            case model.now of
+                Nothing ->
+                    row [] [ text "Initializing ..." ]
+
+                Just time ->
                     let
-                        timeLeft =
-                            Event.secondsToString timer.secondsLeft
+                        timerTimeLeft =
+                            timeLeft timer time utc
                     in
                     column [ centerX, centerY, width (fillPortion 1), Font.size 45 ]
-                        [ row [ centerX, centerY ] [ text timer.event.title ]
-                        , el [ centerX, centerY ] (paragraph [] [ text timeLeft ])
+                        [ row [ centerX, centerY ] [ text timer.title ]
+                        , row [ centerX, centerY ]
+                            [ maybeInterval timerTimeLeft.years "year"
+                            , maybeInterval timerTimeLeft.months "month"
+                            , maybeInterval timerTimeLeft.weeks "week"
+                            , maybeInterval timerTimeLeft.days "day"
+                            , maybeInterval timerTimeLeft.hours "hour"
+                            , maybeInterval timerTimeLeft.minutes "minute"
+                            , maybeInterval timerTimeLeft.seconds "second"
+                            ]
                         ]
-
-                Nothing ->
-                    row [ Font.size 30 ] [ text "Can't decode event data, check url" ]
 
 
 view : Model -> Browser.Document Msg
