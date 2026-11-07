@@ -1,32 +1,24 @@
 module Main exposing (main)
 
--- Time extra
-
-import Base64
 import Browser exposing (UrlRequest(..))
 import Browser.Navigation as Nav
 import Element exposing (..)
 import Element.Background as Background
 import Element.Border as Border
-import Element.Events exposing (..)
 import Element.Font as Font
 import Element.Input as Input
-import Html exposing (Html)
+import Element.Region as Region
+import Html.Attributes as Attributes
 import Maybe
 import String.Extra
 import Task
-import Time exposing (Month(..), utc)
-import Time.Extra as Time
+import Time exposing (utc)
 import Timer exposing (..)
 import Url
-import Url.Parser as Url exposing ((</>), Parser, custom)
+import Url.Parser as Parser
 
 
 yellow =
-    rgb255 239 233 174
-
-
-purple =
     rgb255 239 233 174
 
 
@@ -38,14 +30,11 @@ white =
     rgb255 255 255 255
 
 
-type alias Time =
-    Float
-
-
 type alias Model =
     { navKey : Nav.Key
     , page : Page
     , now : Maybe Time.Posix
+    , formError : Maybe String
     }
 
 
@@ -75,52 +64,28 @@ templateTimerForm =
     , minutes = ""
     , seconds = ""
     , title = ""
-    , filled = False
     }
-
-
-base64Parser : Parser (Timer -> a) a
-base64Parser =
-    custom "STRING" base64StringToTimer
-
-
-newTimerStringParser : String -> Maybe TimerForm
-newTimerStringParser string =
-    if string == "new" then
-        Just templateTimerForm
-
-    else
-        Nothing
-
-
-newTimerParser : Parser (TimerForm -> a) a
-newTimerParser =
-    custom "STRING" newTimerStringParser
 
 
 urlToPage : Url.Url -> Page
 urlToPage url =
-    -- We start with our URL
-    url
-        -- Send it through our URL parser (located below)
-        |> Url.parse urlParser
-        -- And if it didn't match any known pages, return Index
-        |> Maybe.withDefault Dunno
+    if String.startsWith "/t/" url.path then
+        url.path
+            |> String.dropLeft 3
+            |> Url.percentDecode
+            |> Maybe.andThen base64StringToTimer
+            |> Maybe.map ShowTimer
+            |> Maybe.withDefault Dunno
 
-
-urlParser : Parser (Page -> a) a
-urlParser =
-    -- We try to match one of the following URLs
-    Url.oneOf
-        -- Url.top matches root (i.e. there is nothing after 'https://example.com')
-        [ Url.map Index Url.top
-
-        -- Url.s matches URLs ending with some string, in our case '/cats'
-        , Url.map CreateTimer newTimerParser
-
-        -- Again, Url.s matches a string. </> matches a '/' in the URL, and Url.int matches any integer and "returns" it, so that the user page value gets the user ID
-        , Url.map ShowTimer (Url.s "t" </> base64Parser)
-        ]
+    else
+        Parser.parse
+            (Parser.oneOf
+                [ Parser.map Index Parser.top
+                , Parser.map (CreateTimer templateTimerForm) (Parser.s "new")
+                ]
+            )
+            url
+            |> Maybe.withDefault Dunno
 
 
 tickOnce : Cmd Msg
@@ -129,10 +94,11 @@ tickOnce =
 
 
 init : () -> Url.Url -> Nav.Key -> ( Model, Cmd Msg )
-init flags url key =
+init _ url key =
     ( { navKey = key
       , page = urlToPage url
       , now = Nothing
+      , formError = Nothing
       }
     , tickOnce
     )
@@ -148,12 +114,7 @@ type Msg
 
 buildUrlString : Timer -> String
 buildUrlString timer =
-    "/t/" ++ Base64.encode (String.fromInt timer.posixSeconds ++ "<|>" ++ timer.title)
-
-
-formFilled : TimerForm -> Bool
-formFilled form =
-    True
+    "/t/" ++ toBase64 timer
 
 
 update : Msg -> Model -> ( Model, Cmd Msg )
@@ -161,20 +122,16 @@ update msg model =
     case msg of
         BuildTimer timerForm ->
             case buildTimerFromForm timerForm of
-                Just timer ->
+                Ok timer ->
                     ( { model | page = ShowTimer timer }, Nav.pushUrl model.navKey (buildUrlString timer) )
 
-                Nothing ->
-                    ( model, Cmd.none )
+                Err error ->
+                    ( { model | formError = Just error }, Cmd.none )
 
         UpdateTimerForm timerForm ->
-            let
-                updatedForm =
-                    { timerForm | filled = True }
-            in
             case model.page of
                 CreateTimer _ ->
-                    ( { model | page = CreateTimer updatedForm }, Cmd.none )
+                    ( { model | page = CreateTimer timerForm, formError = Nothing }, Cmd.none )
 
                 _ ->
                     ( model, Cmd.none )
@@ -195,13 +152,13 @@ update msg model =
                     )
 
         UrlChange url ->
-            ( { model | page = urlToPage url }
+            ( { model | page = urlToPage url, formError = Nothing }
             , tickOnce
             )
 
 
-inputStyles =
-    [ Font.color (rgb255 0 0 0), width (fillPortion 1), spacing 36, paddingEach edges ]
+inputStyles label =
+    [ Font.color black, width (fillPortion 1), spacing 8, paddingXY 8 12, htmlAttribute (Attributes.attribute "aria-label" label) ]
 
 
 edges =
@@ -216,69 +173,72 @@ placeholder placeholderText =
     Just (Input.placeholder [] (el [ alignLeft ] (text placeholderText)))
 
 
-renderTimerForm : TimerForm -> Element Msg
-renderTimerForm timerForm =
-    el [ padding 100 ]
-        (column [ centerX, centerY, width fill, Font.size 50 ]
-            [ row [ width fill ]
-                [ Input.text inputStyles
+renderTimerForm : Maybe String -> TimerForm -> Element Msg
+renderTimerForm error timerForm =
+    el [ width fill ]
+        (column [ centerX, width fill, spacing 16, Font.size 24 ]
+            [ el [ Region.heading 1, Font.size 32 ] (text "Create a timer")
+            , row [ width fill ]
+                [ Input.text (inputStyles "Title")
                     { label =
-                        Input.labelHidden "Title"
+                        Input.labelAbove [ Font.size 14 ] (text "Title")
                     , placeholder = placeholder "Name it"
                     , text = timerForm.title
                     , onChange = \title -> UpdateTimerForm { timerForm | title = title }
                     }
                 ]
             , column [ width fill ]
-                [ row [ Font.size 14, paddingEach edges ] [ text "add date" ]
-                , row [ width fill ]
-                    [ Input.text inputStyles
+                [ row [ Font.size 14, paddingEach edges ] [ text "Date and time · UTC (time optional)" ]
+                , row [ width fill, spacing 12 ]
+                    [ Input.text (inputStyles "Year")
                         { label =
-                            Input.labelHidden "Year"
+                            Input.labelAbove [ Font.size 14 ] (text "Year")
                         , placeholder = placeholder "YYYY"
                         , text = timerForm.year
-                        , onChange = \year -> UpdateTimerForm { timerForm | year = sanitizeInt year 9999 }
+                        , onChange = \year -> UpdateTimerForm { timerForm | year = year }
                         }
-                    , Input.text inputStyles
+                    , Input.text (inputStyles "Month")
                         { label =
-                            Input.labelHidden "Month"
+                            Input.labelAbove [ Font.size 14 ] (text "Month")
                         , placeholder = placeholder "MM"
                         , text = timerForm.month
-                        , onChange = \month -> UpdateTimerForm { timerForm | month = sanitizeInt month 12 }
+                        , onChange = \month -> UpdateTimerForm { timerForm | month = month }
                         }
-                    , Input.text inputStyles
+                    , Input.text (inputStyles "Day")
                         { label =
-                            Input.labelHidden "Day"
+                            Input.labelAbove [ Font.size 14 ] (text "Day")
                         , placeholder = placeholder "DD"
                         , text = timerForm.day
-                        , onChange = \day -> UpdateTimerForm { timerForm | day = sanitizeInt day 31 }
+                        , onChange = \day -> UpdateTimerForm { timerForm | day = day }
                         }
                     ]
                 ]
-            , row [ Font.size 50 ]
-                [ Input.text inputStyles
+            , row [ width fill, spacing 12 ]
+                [ Input.text (inputStyles "Hours")
                     { label =
-                        Input.labelHidden "Hours"
+                        Input.labelAbove [ Font.size 14 ] (text "Hours")
                     , placeholder = placeholder "HH"
                     , text = timerForm.hours
-                    , onChange = \hours -> UpdateTimerForm { timerForm | hours = sanitizeInt hours 23 }
+                    , onChange = \hours -> UpdateTimerForm { timerForm | hours = hours }
                     }
-                , Input.text inputStyles
+                , Input.text (inputStyles "Minutes")
                     { label =
-                        Input.labelHidden "Minutes"
+                        Input.labelAbove [ Font.size 14 ] (text "Minutes")
                     , placeholder = placeholder "MM"
                     , text = timerForm.minutes
-                    , onChange = \minutes -> UpdateTimerForm { timerForm | minutes = sanitizeInt minutes 59 }
+                    , onChange = \minutes -> UpdateTimerForm { timerForm | minutes = minutes }
                     }
-                , Input.text inputStyles
+                , Input.text (inputStyles "Seconds")
                     { label =
-                        Input.labelHidden "Seconds"
+                        Input.labelAbove [ Font.size 14 ] (text "Seconds")
                     , placeholder = placeholder "SS"
                     , text = timerForm.seconds
-                    , onChange = \seconds -> UpdateTimerForm { timerForm | seconds = sanitizeInt seconds 59 }
+                    , onChange = \seconds -> UpdateTimerForm { timerForm | seconds = seconds }
                     }
                 ]
-            , row [ Font.size 50 ]
+            , paragraph [ Font.size 16, Font.color (rgb255 140 30 30), htmlAttribute (Attributes.attribute "role" "alert") ]
+                [ text (Maybe.withDefault "" error) ]
+            , row [ width fill, spacing 12 ]
                 [ Input.button
                     [ Background.color black
                     , Font.color white
@@ -287,27 +247,11 @@ renderTimerForm timerForm =
                     , width fill
                     ]
                     { onPress = Just (BuildTimer timerForm)
-                    , label = Element.text "apply"
+                    , label = Element.text "Create timer"
                     }
                 ]
             ]
         )
-
-
-sanitizeInt : String -> Int -> String
-sanitizeInt value limit =
-    let
-        intValue =
-            abs (Maybe.withDefault 0 (String.toInt value))
-    in
-    if intValue < 10 then
-        "0" ++ String.fromInt intValue
-
-    else if intValue > limit then
-        String.fromInt limit
-
-    else
-        String.fromInt intValue
 
 
 maybePluralize : Int -> String -> String
@@ -328,26 +272,21 @@ renderPage : Model -> Element Msg
 renderPage model =
     case model.page of
         Dunno ->
-            column [ centerX, centerY ]
-                [ row [ centerX, centerY ]
-                    [ Element.el [ centerX, centerY, Font.size 30 ] (text "Error! Dunno what to do with that url :(")
-                    ]
-                ]
+            paragraph [ Font.size 28, htmlAttribute (Attributes.attribute "role" "alert") ] [ text "Invalid timer link." ]
 
         Index ->
-            column [ spacing 100, padding 100, Font.size 45 ]
+            column [ spacing 28, Font.size 28 ]
                 [ paragraph [] [ text "This site helps you to track something that is important to you. " ]
                 , paragraph [] [ text "Be it last time you had sex, or a day you quit smoking. " ]
                 , paragraph []
-                    [ text " You can create your own timer by clicking "
-                    , link
+                    [ link
                         [ Font.heavy, Font.underline ]
-                        { url = "/new", label = text "here." }
+                        { url = "/new", label = text "Create a timer." }
                     ]
                 ]
 
         CreateTimer timerForm ->
-            column [] [ renderTimerForm timerForm ]
+            renderTimerForm model.formError timerForm
 
         ShowTimer timer ->
             case model.now of
@@ -359,10 +298,24 @@ renderPage model =
                         timerTimeLeft =
                             timeLeft timer time utc
                     in
-                    column [ centerX, centerY, width (fillPortion 1), Font.size 45 ]
-                        [ row [ centerX, centerY ] [ text timer.title ]
-                        , row [ centerX, centerY ]
-                            [ maybeInterval timerTimeLeft.years "year"
+                    column [ centerX, width fill, spacing 28, Font.size 28 ]
+                        [ paragraph [ Region.heading 1 ] [ text timer.title ]
+                        , paragraph [ Font.size 16 ]
+                            [ text
+                                (if timer.posixSeconds * 1000 > Time.posixToMillis time then
+                                    "Time remaining"
+
+                                 else
+                                    "Time elapsed"
+                                )
+                            ]
+                        , wrappedRow [ spacing 8 ]
+                            [ if timerTimeLeft == TimeLeft 0 0 0 0 0 0 0 then
+                                text "0 seconds"
+
+                              else
+                                text ""
+                            , maybeInterval timerTimeLeft.years "year"
                             , maybeInterval timerTimeLeft.months "month"
                             , maybeInterval timerTimeLeft.weeks "week"
                             , maybeInterval timerTimeLeft.days "day"
@@ -370,6 +323,7 @@ renderPage model =
                             , maybeInterval timerTimeLeft.minutes "minute"
                             , maybeInterval timerTimeLeft.seconds "second"
                             ]
+                        , paragraph [ Font.size 14 ] [ text "Share this timer: copy the link from your address bar." ]
                         ]
 
 
@@ -383,11 +337,16 @@ view model =
             , Font.size 16
             , Font.light
             , Font.family
-                [ Font.typeface "Fira Code"
+                [ Font.typeface "monospace"
                 , Font.sansSerif
                 ]
             ]
-            (renderPage model)
+            (column [ width (fill |> maximum 800), centerX, paddingXY 24 40, spacing 40, Region.mainContent ]
+                [ link [ Font.size 16 ] { url = "/", label = text "Counting seconds" }
+                , renderPage model
+                , link [ Font.size 16, Font.underline ] { url = "/new", label = text "New timer" }
+                ]
+            )
         ]
     }
 

@@ -1,0 +1,31 @@
+{
+  "name": "timecounter",
+  "version": "1.0.0",
+  "private": true,
+  "type": "module",
+  "engines": {
+    "node": ">=22.12.0"
+  },
+  "scripts": {
+    "dev": "vite --host 127.0.0.1 --port 4243 --strictPort",
+    "build": "vite build",
+    "preview": "vite preview --host 127.0.0.1 --port 4243 --strictPort",
+    "test": "elm-test",
+    "test:e2e": "playwright test",
+    "format": "elm-format src tests --yes",
+    "format:check": "elm-format src tests --validate"
+  },
+  "devDependencies": {
+    "@playwright/test": "1.63.0",
+    "elm": "0.19.2-0",
+    "elm-format": "0.8.8",
+    "elm-test": "0.19.2-1",
+    "vite": "8.3.2",
+    "vite-plugin-elm": "3.0.1"
+  },
+  "overrides": {
+    "node-elm-compiler": {
+      "cross-spawn": "6.0.6"
+    }
+  }
+}

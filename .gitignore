@@ -14,3 +14,7 @@ node_modules
 .DS_Store
 
 release*.tar
+
+playwright-report/
+test-results/
+*.log
